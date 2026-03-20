@@ -25,6 +25,7 @@ python main.py
 ```
 
 ## Integrantes
-- 
-- 
-- 
+- Santiago Andres Walteros 
+- Juan Manuel Barrera
+- Samuel David Martinez Rivera
+- Lucia vega Linares 
