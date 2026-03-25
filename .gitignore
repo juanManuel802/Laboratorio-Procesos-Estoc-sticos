@@ -7,3 +7,4 @@ data/patterns/*.npy
 *.egg-info/
 .DS_Store
 Thumbs.db
+*.mp4

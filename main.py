@@ -1,19 +1,16 @@
 import sys
-import os
 
-# Asegurar que el directorio raíz está en el pythonpath
-sys.path.append(os.path.abspath(os.path.dirname(__file__)))
-
-from classifier.train import main as train_main
-from classifier.predict import predecir_audio
+from classifier.entrenamiento import entrenar
+from classifier.clasificador import predecir_audio
 
 def mostrar_menu():
     print("=" * 50)
     print(" SISTEMA DE CLASIFICACIÓN DE SEÑALES DE AUDIO ")
     print("=" * 50)
     print("Uso:")
-    print("  python3 main.py train            -> Inicia la fase de entrenamiento")
-    print("  python3 main.py predict <ruta>   -> Clasifica el audio dado")
+    print("  python main.py gui              -> Lanza la interfaz gráfica")
+    print("  python main.py train            -> Inicia la fase de entrenamiento")
+    print("  python main.py predict <ruta>   -> Clasifica el audio dado")
     print("=" * 50)
 
 def main():
@@ -23,15 +20,30 @@ def main():
         
     comando = sys.argv[1].lower()
     
-    if comando == "train":
-        train_main()
+    if comando == "gui":
+        import pyqtgraph as pg
+        from PyQt6.QtWidgets import QApplication
+        from gui.main_window import VentanaPrincipal
+        
+        pg.setConfigOptions(antialias=True)
+        app = QApplication(sys.argv)
+        app.setStyle("Fusion")
+        ventana = VentanaPrincipal()
+        ventana.show()
+        sys.exit(app.exec())
+        
+    elif comando == "train":
+        print("Iniciando entrenamiento...")
+        entrenar()
+        
     elif comando == "predict":
         if len(sys.argv) < 3:
-            print("Error: falta el argumento de la ruta del archivo de audio para calcular.")
-            print("Uso: python3 main.py predict <ruta_al_archivo>")
+            print("Error: falta el argumento de la ruta del archivo de audio para clasificar.")
+            print("Uso: python main.py predict <ruta_al_archivo>")
             sys.exit(1)
         ruta = sys.argv[2]
         predecir_audio(ruta)
+        
     else:
         print(f"Error: comando '{comando}' no reconocido.")
         mostrar_menu()
