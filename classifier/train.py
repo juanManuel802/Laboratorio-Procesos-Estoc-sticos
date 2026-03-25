@@ -2,12 +2,7 @@ import os
 import sys
 import numpy as np
 
-# Intentar importar librerías para leer MP3
-try:
-    import librosa
-    HAS_LIBROSA = True
-except ImportError:
-    HAS_LIBROSA = False
+import librosa
 
 # Agregar el directorio raíz al PATH para poder importar signal_processing
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -15,8 +10,6 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from signal_processing.analisis import autocovarianza_discreta, calcular_fft, calcular_magnitud
 
 def cargar_audio(ruta_archivo, sr=44100):
-    if not HAS_LIBROSA:
-        raise RuntimeError("No se encontró librosa. Por favor instálalo con: pip install librosa")
     # Cargar audio convirtiendo a mono y a una tasa de muestreo estándar
     senal, _ = librosa.load(ruta_archivo, sr=sr, mono=True)
     return senal
