@@ -24,15 +24,15 @@ RUTA_PAT_RB    = os.path.join(CARPETA_PAT, "espectro_promedio_rb.npy")
 RUTA_PAT_EM    = os.path.join(CARPETA_PAT, "espectro_promedio_em.npy")
 
 
-def predecir_audio(ruta_audio: str) -> str:
+def predecir_senal(senal: np.ndarray) -> str:
     """
-    Lee un archivo de audio, calcula su espectro de magnitud
+    Recibe un array numpy de señal en crudo, calcula su espectro de magnitud
     y lo compara con los patrones entrenados usando distancia euclidiana.
     
     Parámetros
     ----------
-    ruta_audio : str
-        Ruta al archivo a clasificar.
+    senal : np.ndarray
+        Señal de audio mono a 44100 Hz.
         
     Retorna
     -------
@@ -41,8 +41,7 @@ def predecir_audio(ruta_audio: str) -> str:
     if not os.path.exists(RUTA_PAT_RB) or not os.path.exists(RUTA_PAT_EM):
         raise FileNotFoundError("No se encontraron los patrones. Corre el entrenamiento primero.")
 
-    # 1. Cargar la señal
-    senal, _ = librosa.load(ruta_audio, sr=SAMPLE_RATE, mono=True)
+    # 1. Asegurar el tamaño esperado
     if len(senal) > N_MUESTRAS:
         senal = senal[:N_MUESTRAS]
     elif len(senal) < N_MUESTRAS:
@@ -73,3 +72,24 @@ def predecir_audio(ruta_audio: str) -> str:
 
     print(f"\\n> DECISIÓN: El audio ingresado es: *** {clase} ***\\n")
     return clase
+
+
+def predecir_audio(ruta_audio: str) -> str:
+    """
+    Lee un archivo de audio del disco, calcula su espectro de magnitud
+    y lo compara con los patrones entrenados usando distancia euclidiana.
+    
+    Parámetros
+    ----------
+    ruta_audio : str
+        Ruta al archivo a clasificar.
+        
+    Retorna
+    -------
+    Clase predicha: "RUIDO BLANCO" o "EMISORA"
+    """
+    # Cargar la señal desde disco
+    senal, _ = librosa.load(ruta_audio, sr=SAMPLE_RATE, mono=True)
+    
+    # Delegar a la lógica matemática genérica en memoria
+    return predecir_senal(senal)

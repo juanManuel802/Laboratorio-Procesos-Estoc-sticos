@@ -7,6 +7,9 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer
 import pyqtgraph as pg
 
+from audio.captura import CapturaAudio
+from classifier.clasificador import predecir_senal
+from signal_processing.analisis import calcular_fft, calcular_magnitud
 
 BUFFER = 2048
 SR     = 44100
@@ -54,6 +57,12 @@ class VentanaPrincipal(QMainWindow):
         )
         layout.addWidget(self.graf_psd)
 
+        # UI: Resultado de clasificación
+        self.lbl_resultado = QLabel("Presiona iniciar para grabar (2s)")
+        self.lbl_resultado.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_resultado.setStyleSheet("font-size: 22px; font-weight: bold; color: #a5d6a7;")
+        layout.addWidget(self.lbl_resultado)
+
         #Botones
         fila = QHBoxLayout()
         fila.setSpacing(12)
@@ -72,56 +81,51 @@ class VentanaPrincipal(QMainWindow):
             QPushButton:disabled { background-color: #263238; color: #546e7a; }
         """)
 
-        self.btn_detener = QPushButton("■  Detener")
-        self.btn_detener.setFixedHeight(38)
-        self.btn_detener.setEnabled(False)
-        self.btn_detener.setStyleSheet("""
-            QPushButton {
-                background-color: #37474f;
-                color: #b0bec5;
-                border-radius: 6px;
-                font-size: 13px;
-                padding: 0 24px;
-                border: 1px solid #455a64;
-            }
-            QPushButton:hover    { background-color: #455a64; color: white; }
-            QPushButton:disabled { background-color: #1c2d40; color: #37474f; border-color: #263238; }
-        """)
-
         self.btn_iniciar.clicked.connect(self.iniciar)
-        self.btn_detener.clicked.connect(self.detener)
 
         fila.addStretch()
         fila.addWidget(self.btn_iniciar)
-        fila.addWidget(self.btn_detener)
         fila.addStretch()
         layout.addLayout(fila)
 
-        # ── Timer para datos demo ──
-        self._timer = QTimer()
-        self._timer.setInterval(60)
-        self._timer.timeout.connect(self._actualizar)
+        # ── Motor de Captura ──
+        self.captura = CapturaAudio(callback=self.procesar_audio_grabado)
 
     def iniciar(self):
-        # TODO: conectar con audio/captura.py
         self.btn_iniciar.setEnabled(False)
-        self.btn_detener.setEnabled(True)
-        self._timer.start()
+        self.lbl_resultado.setText("Grabando... (2s)")
+        self.lbl_resultado.setStyleSheet("font-size: 24px; font-weight: bold; color: #ef5350;")
+        self.captura.iniciar()
 
-    def detener(self):
-        #detener captura boton
+    def procesar_audio_grabado(self, senal, error=None):
         self.btn_iniciar.setEnabled(True)
-        self.btn_detener.setEnabled(False)
-        self._timer.stop()
+        if error is not None:
+            self.lbl_resultado.setText(f"Error de micrófono: {error}")
+            return
+            
+        # 1. Mostrar la onda real en el tiempo
+        # senal tiene 88200 puntos, graficaremos un submuestreo para agilidad visual
+        paso = max(1, len(senal) // BUFFER)
+        onda_reducida = senal[::paso]
+        self.curva_onda.setData(onda_reducida)
 
-    def _actualizar(self):
-        #Datos falsos pa probar
-        onda  = np.random.normal(0, 0.2, BUFFER)
-        freqs = np.linspace(0, SR // 2, 512)
-        psd   = np.random.uniform(-60, -40, 512)
-
-        self.curva_onda.setData(onda)
+        # 2. Calcular y mostrar espectro
+        fft_vals = calcular_fft(senal)
+        freqs, psd = calcular_magnitud(fft_vals, SR)
         self.curva_psd.setData(freqs, psd)
+
+        # 3. Clasificar matemáticamente
+        try:
+            clase = predecir_senal(senal)
+            if clase == "RUIDO BLANCO":
+                color = "#4fc3f7"  # Azul claro
+            else:
+                color = "#ffca28"  # Amarillo
+            self.lbl_resultado.setText(f"¡Resultado: {clase}!")
+            self.lbl_resultado.setStyleSheet(f"font-size: 28px; font-weight: bold; color: {color};")
+        except Exception as e:
+            self.lbl_resultado.setText("Error: Asegúrate de haber entrenado el modelo.")
+            print(f"Error interno: {e}")
 
 
 if __name__ == "__main__":
