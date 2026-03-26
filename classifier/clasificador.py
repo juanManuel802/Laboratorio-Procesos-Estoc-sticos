@@ -9,7 +9,7 @@ import os
 import numpy as np
 import librosa
 
-from signal_processing.analisis import calcular_fft, calcular_magnitud
+from signal_processing.analisis import normalizar_rms, autocovarianza_discreta, calcular_fft, calcular_magnitud
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONSTANTES
@@ -47,10 +47,16 @@ def predecir_senal(senal: np.ndarray) -> str:
     elif len(senal) < N_MUESTRAS:
         senal = np.pad(senal, (0, N_MUESTRAS - len(senal)))
 
-    # 2. Calcular la FFT sobre la señal
-    fft_vals = calcular_fft(senal)
+    # 2. Normalizar por RMS (igual que en entrenamiento)
+    senal = normalizar_rms(senal)
 
-    # 3. Magnitud espectral
+    # 3. Autocovarianza discreta (igual que en entrenamiento)
+    _, autocov_vals = autocovarianza_discreta(senal)
+
+    # 4. FFT sobre la autocovarianza (no sobre la señal cruda)
+    fft_vals = calcular_fft(autocov_vals)
+
+    # 5. Magnitud espectral
     _, magnitud = calcular_magnitud(fft_vals, SAMPLE_RATE)
 
     # 4. Cargar promedios
