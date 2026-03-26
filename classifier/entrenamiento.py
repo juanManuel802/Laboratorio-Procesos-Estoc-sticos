@@ -46,7 +46,7 @@ def _leer_audio(ruta_archivo: str) -> np.ndarray:
     Se usa soundfile en lugar de librosa porque es más ligero y directo
     para archivos WAV, sin dependencias adicionales de decodificación.
 
-    Si el archivo es estéreo, se promedia entre canales para obtener mono.
+    Si el archivo tiene múltiples canales, se extrae el primero para forzar mono.
     Si tiene más o menos muestras de las esperadas, se recorta o rellena.
 
     Parámetros
@@ -60,6 +60,10 @@ def _leer_audio(ruta_archivo: str) -> np.ndarray:
         Array 1D de 88200 muestras float32.
     """
     senal, sr = sf.read(ruta_archivo, dtype='float32')
+
+    # Si el archivo tiene múltiples canales, extraemos solo el primero
+    if senal.ndim > 1:
+        senal = senal[:, 0]
 
     # Advertir si el sample rate del archivo no coincide con el esperado
     if sr != SAMPLE_RATE:
