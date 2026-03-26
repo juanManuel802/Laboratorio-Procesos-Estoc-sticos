@@ -63,9 +63,9 @@ def predecir_senal(senal: np.ndarray) -> str:
     pat_rb = np.load(RUTA_PAT_RB)
     pat_em = np.load(RUTA_PAT_EM)
 
-    # 5. Distancia Euclidiana
-    dist_rb = np.linalg.norm(magnitud - pat_rb)
-    dist_em = np.linalg.norm(magnitud - pat_em)
+    # 5. Distancia de Manhathan (diferencia absoluta)
+    dist_rb = np.sum(np.abs(magnitud - pat_rb))
+    dist_em = np.sum(np.abs(magnitud - pat_em))
 
     print(f"--- RESULTADOS DE CLASIFICACIÓN ---")
     print(f"Distancia a 'Ruido Blanco': {dist_rb:.4f}")
