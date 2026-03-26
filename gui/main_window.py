@@ -23,7 +23,7 @@ from PyQt6.QtCore import Qt
 
 from audio.captura import CapturaAudio
 from classifier.clasificador import predecir_senal, CARPETA_PAT
-from signal_processing.analisis import calcular_fft, calcular_magnitud
+from signal_processing.analisis import normalizar_rms, autocovarianza_discreta, calcular_fft, calcular_magnitud
 from gui.panel_grafica import PanelGrafica
 
 
@@ -179,8 +179,11 @@ class VentanaPrincipal(QMainWindow):
             senal[::paso],
         )
 
-        # 2. Espectro: FFT directa sobre la señal cruda (para visualización)
-        fft_vals = calcular_fft(senal)
+        # 2. Espectro de potencia: mismo pipeline que entrenamiento
+        #    normalizar → autocovarianza → FFT → magnitud
+        senal_norm = normalizar_rms(senal)
+        _, autocov_vals = autocovarianza_discreta(senal_norm)
+        fft_vals = calcular_fft(autocov_vals)
         freqs, psd = calcular_magnitud(fft_vals, SAMPLE_RATE)
         self.panel_psd.actualizar(freqs, psd)
 

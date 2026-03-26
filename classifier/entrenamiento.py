@@ -16,6 +16,7 @@ import numpy as np
 import soundfile as sf   # reemplaza a librosa — más limpio para WAV
 
 from signal_processing.analisis import (
+    normalizar_rms,
     autocovarianza_discreta,
     calcular_fft,
     calcular_magnitud,
@@ -140,7 +141,11 @@ def _procesar_carpeta(carpeta: str) -> tuple[np.ndarray, np.ndarray]:
         # 1. Leer el audio como array numpy mono float32
         senal = _leer_audio(ruta)
 
-        # 2. Autocovarianza discreta (Wiener-Khinchin, sin np.correlate)
+        # 2. Normalizar por RMS para que la escala sea independiente
+        #    del volumen o ganancia del micrófono con el que se grabó
+        senal = normalizar_rms(senal)
+
+        # 3. Autocovarianza discreta (Wiener-Khinchin, sin np.correlate)
         #    C_XX(τ) ≈ 0 para τ≠0 si es ruido blanco → espectro plano
         #    C_XX(τ) tiene estructura si es emisora   → espectro con picos
         _, autocov_vals = autocovarianza_discreta(senal)

@@ -14,6 +14,36 @@ import numpy as np
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# NORMALIZACIÓN DE AMPLITUD
+# ─────────────────────────────────────────────────────────────────────────────
+
+def normalizar_rms(senal: np.ndarray) -> np.ndarray:
+    """
+    Normaliza la amplitud de una señal dividiendo por su RMS (Root Mean Square).
+
+    Por qué es necesario:
+        La autocovarianza es proporcional a amplitud². Si dos grabaciones del
+        mismo tipo de señal tienen distinta ganancia de micrófono o volumen,
+        sus espectros de potencia diferirán en escala pero NO en forma.
+        Al normalizar por RMS, todas las señales se procesan como si tuvieran
+        la misma "energía", haciendo que el pipeline sea independiente del
+        nivel de grabación.
+
+    El +1e-10 en el denominador evita división por cero cuando la señal
+    es silencio total (RMS ≈ 0).
+
+    Parámetros
+    ----------
+    senal : np.ndarray  Array 1D de muestras de audio (float).
+
+    Retorna
+    -------
+    senal_norm : np.ndarray  Señal con RMS unitario. Mismo shape que senal.
+    """
+    rms = np.sqrt(np.mean(senal ** 2))
+    return senal / (rms + 1e-10)
+
+# ─────────────────────────────────────────────────────────────────────────────
 # AUTOCOVARIANZA DISCRETA
 # ─────────────────────────────────────────────────────────────────────────────
 

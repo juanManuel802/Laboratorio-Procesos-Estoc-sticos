@@ -1,0 +1,1075 @@
+
+========================================================
+Ruta del archivo: ./audio/captura.py
+========================================================
+"""
+audio/captura.py
+
+Módulo de captura de audio en tiempo real desde el micrófono.
+
+Única responsabilidad: grabar exactamente 2 segundos de audio
+y devolver un array numpy listo para ser procesado.
+
+NO hace matemáticas, NO toca la GUI, NO toma decisiones.
+Se ejecuta en un hilo separado para no bloquear la interfaz gráfica.
+"""
+
+import threading
+import numpy as np
+import sounddevice as sd
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CONSTANTES — deben coincidir con el resto del sistema
+# ─────────────────────────────────────────────────────────────────────────────
+
+SAMPLE_RATE = 44100
+DURACION_SEG = 2
+N_MUESTRAS = SAMPLE_RATE * DURACION_SEG  # 88200 muestras
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CLASE PRINCIPAL
+# ─────────────────────────────────────────────────────────────────────────────
+
+class CapturaAudio:
+    """
+    Graba audio desde el micrófono en un hilo separado.
+
+    La GUI crea una instancia, llama a iniciar() y cuando la grabación
+    termina se ejecuta automáticamente el callback que ella misma proveyó.
+
+    Ejemplo de uso desde la GUI:
+        def al_terminar(senal):
+            resultado = clasificador.predecir(senal)
+            self.mostrar_resultado(resultado)
+
+        self.captura = CapturaAudio(callback=al_terminar)
+        self.captura.iniciar()
+    """
+
+    def __init__(self, callback):
+        """
+        Parámetros
+        ----------
+        callback : callable
+            Función que se llama al terminar la grabación.
+            Recibe un argumento: array numpy de forma (88200,) float32.
+            Es la GUI quien define qué hacer con ese array.
+        """
+        self._callback = callback
+        self._hilo = None
+        self._grabando = False
+
+    # ── API pública ───────────────────────────────────────────────────────────
+
+    def iniciar(self):
+        """
+        Arranca la grabación en un hilo separado.
+        Retorna inmediatamente — no bloquea la GUI.
+        """
+        if self._grabando:
+            return  # ya hay una grabación en curso, ignorar
+
+        self._grabando = True
+        self._hilo = threading.Thread(target=self._grabar, daemon=True)
+        self._hilo.start()
+
+    def esta_grabando(self) -> bool:
+        """Indica si hay una grabación activa en este momento."""
+        return self._grabando
+
+    # ── Lógica interna ────────────────────────────────────────────────────────
+
+    def _grabar(self):
+        """
+        Corre en el hilo secundario. Graba N_MUESTRAS del micrófono
+        y llama al callback con el array resultante.
+
+        sounddevice.rec() es bloqueante dentro del hilo — espera los
+        2 segundos completos antes de continuar. Pero como corre en
+        un hilo separado, la GUI no se congela.
+        """
+        try:
+            # Grabar: N_MUESTRAS a SAMPLE_RATE Hz, 1 canal (mono), float32
+            # sd.rec() inicia la grabación y sd.wait() espera a que termine
+            senal_stereo = sd.rec(
+                frames=N_MUESTRAS,
+                samplerate=SAMPLE_RATE,
+                channels=1,
+                dtype="float32",
+            )
+            sd.wait()  # bloquea este hilo hasta completar los 2 segundos
+
+            # sd.rec devuelve shape (N_MUESTRAS, 1) → aplanar a (N_MUESTRAS,)
+            senal = senal_stereo.flatten()
+
+            # Entregar el array a quien esté escuchando (la GUI)
+            self._callback(senal)
+
+        except Exception as e:
+            # Si el micrófono no está disponible u ocurre otro error,
+            # notificar a la GUI con None para que pueda mostrar el error
+            self._callback(None, error=str(e))
+
+        finally:
+            self._grabando = False
+========================================================
+Ruta del archivo: ./classifier/clasificador.py
+========================================================
+"""
+classifier/clasificador.py
+
+Lógica para predecir si un archivo de audio de entrada
+es ruido blanco o de una emisora de radio.
+"""
+
+import os
+import numpy as np
+import librosa
+
+from signal_processing.analisis import normalizar_rms, autocovarianza_discreta, calcular_fft, calcular_magnitud
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CONSTANTES
+# ─────────────────────────────────────────────────────────────────────────────
+
+SAMPLE_RATE    = 44100
+DURACION_SEG   = 2
+N_MUESTRAS     = SAMPLE_RATE * DURACION_SEG
+
+CARPETA_PAT    = os.path.join(os.path.dirname(__file__), "..", "data", "patterns")
+RUTA_PAT_RB    = os.path.join(CARPETA_PAT, "espectro_promedio_rb.npy")
+RUTA_PAT_EM    = os.path.join(CARPETA_PAT, "espectro_promedio_em.npy")
+
+
+def predecir_senal(senal: np.ndarray) -> str:
+    """
+    Recibe un array numpy de señal en crudo, calcula su espectro de magnitud
+    y lo compara con los patrones entrenados usando distancia euclidiana.
+    
+    Parámetros
+    ----------
+    senal : np.ndarray
+        Señal de audio mono a 44100 Hz.
+        
+    Retorna
+    -------
+    Clase predicha: "RUIDO BLANCO" o "EMISORA"
+    """
+    if not os.path.exists(RUTA_PAT_RB) or not os.path.exists(RUTA_PAT_EM):
+        raise FileNotFoundError("No se encontraron los patrones. Corre el entrenamiento primero.")
+
+    # 1. Asegurar el tamaño esperado
+    if len(senal) > N_MUESTRAS:
+        senal = senal[:N_MUESTRAS]
+    elif len(senal) < N_MUESTRAS:
+        senal = np.pad(senal, (0, N_MUESTRAS - len(senal)))
+
+    # 2. Normalizar por RMS (igual que en entrenamiento)
+    senal = normalizar_rms(senal)
+
+    # 3. Autocovarianza discreta (igual que en entrenamiento)
+    _, autocov_vals = autocovarianza_discreta(senal)
+
+    # 4. FFT sobre la autocovarianza (no sobre la señal cruda)
+    fft_vals = calcular_fft(autocov_vals)
+
+    # 5. Magnitud espectral
+    _, magnitud = calcular_magnitud(fft_vals, SAMPLE_RATE)
+
+    # 4. Cargar promedios
+    pat_rb = np.load(RUTA_PAT_RB)
+    pat_em = np.load(RUTA_PAT_EM)
+
+    # 5. Distancia Euclidiana
+    dist_rb = np.linalg.norm(magnitud - pat_rb)
+    dist_em = np.linalg.norm(magnitud - pat_em)
+
+    print(f"--- RESULTADOS DE CLASIFICACIÓN ---")
+    print(f"Distancia a 'Ruido Blanco': {dist_rb:.4f}")
+    print(f"Distancia a 'Emisora':      {dist_em:.4f}")
+
+    if dist_rb < dist_em:
+        clase = "RUIDO BLANCO"
+    else:
+        clase = "EMISORA"
+
+    print(f"\\n> DECISIÓN: El audio ingresado es: *** {clase} ***\\n")
+    return clase
+
+
+def predecir_audio(ruta_audio: str) -> str:
+    """
+    Lee un archivo de audio del disco, calcula su espectro de magnitud
+    y lo compara con los patrones entrenados usando distancia euclidiana.
+    
+    Parámetros
+    ----------
+    ruta_audio : str
+        Ruta al archivo a clasificar.
+        
+    Retorna
+    -------
+    Clase predicha: "RUIDO BLANCO" o "EMISORA"
+    """
+    # Cargar la señal desde disco
+    senal, _ = librosa.load(ruta_audio, sr=SAMPLE_RATE, mono=True)
+    
+    # Delegar a la lógica matemática genérica en memoria
+    return predecir_senal(senal)
+
+========================================================
+Ruta del archivo: ./classifier/entrenamiento.py
+========================================================
+"""
+classifier/entrenamiento.py
+
+Fase de entrenamiento del clasificador.
+Se ejecuta UNA SOLA VEZ con los 200 audios pregrabados.
+
+Resultado: dos archivos .npy en data/patterns/ que representan
+el espectro promedio de cada clase (ruido blanco y emisora).
+
+Todos los audios deben ser exactamente 2 segundos a 44100 Hz
+→ 88200 muestras por audio.
+"""
+
+import os
+import numpy as np
+import soundfile as sf   # reemplaza a librosa — más limpio para WAV
+
+from signal_processing.analisis import (
+    normalizar_rms,
+    autocovarianza_discreta,
+    calcular_fft,
+    calcular_magnitud,
+)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CONSTANTES
+# ─────────────────────────────────────────────────────────────────────────────
+
+SAMPLE_RATE  = 44100
+DURACION_SEG = 2
+N_MUESTRAS   = SAMPLE_RATE * DURACION_SEG  # 88200 muestras esperadas
+
+CARPETA_RB   = "data/recordings/ruido_blanco"
+CARPETA_EM   = "data/recordings/senal_radio"
+CARPETA_PAT  = "data/patterns"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FUNCIÓN AUXILIAR: leer un .wav y devolver array numpy estandarizado
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _leer_audio(ruta_archivo: str) -> np.ndarray:
+    """
+    Lee un archivo .wav y devuelve un array numpy mono de exactamente
+    N_MUESTRAS (88200) valores float32.
+
+    Se usa soundfile en lugar de librosa porque es más ligero y directo
+    para archivos WAV, sin dependencias adicionales de decodificación.
+
+    Si el archivo tiene múltiples canales, se extrae el primero para forzar mono.
+    Si tiene más o menos muestras de las esperadas, se recorta o rellena.
+
+    Parámetros
+    ----------
+    ruta_archivo : str
+        Ruta completa al archivo .wav
+
+    Retorna
+    -------
+    senal : np.ndarray
+        Array 1D de 88200 muestras float32.
+    """
+    senal, sr = sf.read(ruta_archivo, dtype='float32')
+
+    # Si el archivo tiene múltiples canales, extraemos solo el primero
+    if senal.ndim > 1:
+        senal = senal[:, 0]
+
+    # Advertir si el sample rate del archivo no coincide con el esperado
+    if sr != SAMPLE_RATE:
+        print(f"    ⚠️  {os.path.basename(ruta_archivo)}: "
+              f"sample rate {sr} Hz (esperado {SAMPLE_RATE} Hz)")
+
+    # Garantizar exactamente N_MUESTRAS
+    if len(senal) > N_MUESTRAS:
+        senal = senal[:N_MUESTRAS]
+    elif len(senal) < N_MUESTRAS:
+        # Rellenar con ceros al final (no debería pasar con audios de 2s exactos)
+        senal = np.pad(senal, (0, N_MUESTRAS - len(senal)))
+
+    return senal
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FUNCIÓN PRINCIPAL: procesar una carpeta completa
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _procesar_carpeta(carpeta: str) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Lee todos los .wav de una carpeta, calcula autocovarianza + espectro
+    para cada uno, y retorna el espectro promedio.
+
+    Pipeline por audio:
+        señal → autocovarianza_discreta → calcular_fft → calcular_magnitud
+
+    Parámetros
+    ----------
+    carpeta : str
+        Ruta a la carpeta con los archivos .wav
+
+    Retorna
+    -------
+    espectro_promedio : np.ndarray
+        Espectro promedio punto a punto de todos los audios.
+        Shape: (N_MUESTRAS // 2,)
+
+    frecuencias : np.ndarray
+        Frecuencias en Hz del eje X del espectro.
+        Shape: (N_MUESTRAS // 2,)
+    """
+    archivos = sorted([
+        os.path.join(carpeta, f)
+        for f in os.listdir(carpeta)
+        if f.endswith(".wav")
+    ])
+
+    if len(archivos) == 0:
+        raise FileNotFoundError(f"No se encontraron archivos .wav en: {carpeta}")
+
+    print(f"  → Procesando {len(archivos)} archivos en: {carpeta}")
+
+    matriz_espectros = np.zeros((len(archivos), N_MUESTRAS // 2))
+
+    # Se inicializa en None para detectar si ningún audio llegó a procesarse
+    # correctamente. Si al final sigue en None significa que el bucle nunca
+    # completó un audio sin error, y np.save fallaría con un mensaje confuso.
+    # Por eso se verifica explícitamente antes de guardar.
+    frecuencias = None
+
+    # ── NOTA SOBRE AUTOCOVARIANZA PROMEDIO ───────────────────────────────────
+    # La autocovarianza se calcula por audio como paso intermedio del pipeline,
+    # pero el vector resultante NO se guarda ni se usa directamente en la
+    # clasificación. El clasificador opera comparando espectros promedio
+    # (dominio frecuencial). Guardar la autocovarianza en bruto no aplica
+    # para este laboratorio.
+    # ─────────────────────────────────────────────────────────────────────────
+
+    for i, ruta in enumerate(archivos):
+        print(f"    [{i+1}/{len(archivos)}] {os.path.basename(ruta)}")
+
+        # 1. Leer el audio como array numpy mono float32
+        senal = _leer_audio(ruta)
+
+        # 2. Normalizar por RMS para que la escala sea independiente
+        #    del volumen o ganancia del micrófono con el que se grabó
+        senal = normalizar_rms(senal)
+
+        # 3. Autocovarianza discreta (Wiener-Khinchin, sin np.correlate)
+        #    C_XX(τ) ≈ 0 para τ≠0 si es ruido blanco → espectro plano
+        #    C_XX(τ) tiene estructura si es emisora   → espectro con picos
+        _, autocov_vals = autocovarianza_discreta(senal)
+
+        # 3. FFT aplicada sobre la AUTOCOVARIANZA (no sobre la señal cruda)
+        #    Por Wiener-Khinchin, esto entrega el espectro de potencia,
+        #    que es la representación descriptiva que queremos comparar.
+        fft_vals = calcular_fft(autocov_vals)
+
+        # 4. Magnitud del espectro (mitad positiva, parte simétrica descartada)
+        frecuencias, espectro = calcular_magnitud(fft_vals, SAMPLE_RATE)
+        matriz_espectros[i] = espectro
+
+    # Si frecuencias sigue siendo None, ningún archivo se procesó correctamente.
+    # Se lanza un error explícito para evitar un crash confuso en np.save.
+    if frecuencias is None:
+        raise RuntimeError(
+            f"No se pudo procesar ningún archivo en: {carpeta}. "
+            "Revisa que los archivos .wav sean válidos y tengan el formato correcto."
+        )
+
+    # Promedio punto a punto entre todos los espectros de la carpeta
+    # axis=0 → promedio por columna (por cada punto del espectro)
+    espectro_promedio = np.mean(matriz_espectros, axis=0)
+
+    return espectro_promedio, frecuencias
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CALIBRACIÓN (desactivada)
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# def _calibrar(esp_rb, esp_em, porcentaje=0.05):
+#     punto_medio = (esp_rb + esp_em) / 2.0
+#     esp_rb_cal  = esp_rb + porcentaje * (esp_rb - punto_medio)
+#     esp_em_cal  = esp_em + porcentaje * (esp_em - punto_medio)
+#     return esp_rb_cal, esp_em_cal
+#
+# ¿Por qué está comentada?
+# Esta transformación aleja linealmente cada patrón del punto medio entre
+# los dos espectros. En un clasificador por DISTANCIA MÍNIMA (el que usamos),
+# escalar simétricamente ambos patrones no cambia cuál queda más cerca de la
+# señal nueva: el resultado de clasificación es idéntico con o sin calibración.
+#
+# ¿Cómo hacerla realmente útil?
+# Tendría sentido recalcular el umbral de decisión con audios de validación
+# reales (que no estuvieron en el entrenamiento), medir cuántos quedan mal
+# clasificados cerca del límite y ajustar el factor dinámicamente. En ese
+# caso dejaría de ser una escala arbitraria y pasaría a ser una corrección
+# basada en error empírico.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PUNTO DE ENTRADA
+# ─────────────────────────────────────────────────────────────────────────────
+
+def entrenar():
+    """
+    Ejecuta el entrenamiento completo con los 200 audios pregrabados.
+
+    Lee las carpetas data/recordings/ruido_blanco/ y data/recordings/senal_radio/,
+    calcula los espectros promedio de cada clase y los guarda en data/patterns/.
+    """
+    os.makedirs(CARPETA_PAT, exist_ok=True)
+
+    print("═" * 50)
+    print("ENTRENAMIENTO — Ruido blanco")
+    print("═" * 50)
+    esp_rb, frecuencias = _procesar_carpeta(CARPETA_RB)
+
+    print()
+    print("═" * 50)
+    print("ENTRENAMIENTO — Emisora")
+    print("═" * 50)
+    esp_em, _ = _procesar_carpeta(CARPETA_EM)
+
+    # Guardar patrones en data/patterns/
+    np.save(os.path.join(CARPETA_PAT, "espectro_promedio_rb.npy"), esp_rb)
+    np.save(os.path.join(CARPETA_PAT, "espectro_promedio_em.npy"), esp_em)
+    np.save(os.path.join(CARPETA_PAT, "frecuencias.npy"),          frecuencias)
+
+    print()
+    print("✅ Entrenamiento completado. Archivos guardados en data/patterns/:")
+    print("   - espectro_promedio_rb.npy")
+    print("   - espectro_promedio_em.npy")
+    print("   - frecuencias.npy")
+
+
+if __name__ == "__main__":
+    entrenar()
+========================================================
+Ruta del archivo: ./.gitignore
+========================================================
+venv/
+__pycache__/
+*.pyc
+*.pyo
+data/recordings/*.wav
+data/patterns/*.npy
+*.egg-info/
+.DS_Store
+Thumbs.db
+*.mp4
+
+========================================================
+Ruta del archivo: ./gui/main_window.py
+========================================================
+"""
+gui/main_window.py
+
+Ventana principal de la aplicación.
+
+Responsabilidad única:
+    Orquestar los componentes visuales y conectar el motor de captura
+    con el clasificador. No contiene lógica matemática ni de hardware.
+
+Escalabilidad:
+    Añadir una nueva gráfica es solo instanciar otro PanelGrafica y
+    llamar a su método `actualizar()` dentro del callback de captura.
+"""
+
+import os
+import numpy as np
+import pyqtgraph as pg
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget,
+    QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+)
+from PyQt6.QtCore import Qt
+
+from audio.captura import CapturaAudio
+from classifier.clasificador import predecir_senal, CARPETA_PAT
+from signal_processing.analisis import normalizar_rms, autocovarianza_discreta, calcular_fft, calcular_magnitud
+from gui.panel_grafica import PanelGrafica
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CONSTANTES VISUALES
+# ─────────────────────────────────────────────────────────────────────────────
+
+BUFFER      = 2048    # puntos máximos a dibujar en la gráfica de onda
+SAMPLE_RATE = 44100
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _cargar_patrones() -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
+    """
+    Intenta cargar los patrones de entrenamiento desde disco.
+
+    Retorna (frecuencias, patron_rb, patron_em).
+    Si algún archivo no existe (no se corrió train), retorna (None, None, None)
+    y la GUI simplemente no mostrará las curvas de referencia.
+    """
+    ruta_freq = os.path.join(CARPETA_PAT, "frecuencias.npy")
+    ruta_rb   = os.path.join(CARPETA_PAT, "espectro_promedio_rb.npy")
+    ruta_em   = os.path.join(CARPETA_PAT, "espectro_promedio_em.npy")
+
+    if os.path.exists(ruta_freq) and os.path.exists(ruta_rb) and os.path.exists(ruta_em):
+        return np.load(ruta_freq), np.load(ruta_rb), np.load(ruta_em)
+
+    return None, None, None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# VENTANA PRINCIPAL
+# ─────────────────────────────────────────────────────────────────────────────
+
+class VentanaPrincipal(QMainWindow):
+
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Detector de Ruido Blanco")
+        self.setMinimumSize(900, 600)
+        self.setStyleSheet("background-color: #0d1b2a; color: #e0e0e0;")
+
+        central = QWidget()
+        self.setCentralWidget(central)
+        layout  = QVBoxLayout(central)
+        layout.setContentsMargins(30, 30, 30, 30)
+        layout.setSpacing(20)
+
+        # ── Título ────────────────────────────────────────────────────────────
+        titulo = QLabel("Laboratorio — Reconocimiento de Ruido Blanco")
+        titulo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        titulo.setStyleSheet(
+            "font-size: 20px; font-weight: bold; color: #90caf9;"
+        )
+        layout.addWidget(titulo)
+
+        # ── Cargar patrones de entrenamiento (pueden no existir aún) ─────────
+        freqs_pat, pat_rb, pat_em = _cargar_patrones()
+
+        # ── Panel: onda en el tiempo ─────────────────────────────────────────
+        # No tiene referencia de entrenamiento porque promediar fases no tiene
+        # sentido físico: la media de N ondas arbitrarias tiende a cero.
+        self.panel_onda = PanelGrafica(
+            titulo="Señal de audio (tiempo)",
+            color_vivo="#42a5f5",
+            label_x="Muestras",
+            label_y="Amplitud",
+        )
+        layout.addWidget(self.panel_onda)
+
+        # ── Panel: espectro de potencia ──────────────────────────────────────
+        # Aquí sí tiene sentido mostrar los patrones promedio del entrenamiento:
+        # el espectro de potencia es estable entre grabaciones de la misma clase.
+        # Se dibujan ambas referencias para que el usuario vea en cuál "cae" su audio.
+        self.panel_psd = PanelGrafica(
+            titulo="Espectro de potencia (PSD)",
+            color_vivo="#ce93d8",
+            label_x="Frecuencia (Hz)",
+            label_y="Magnitud",
+            freqs_ref=freqs_pat,
+            datos_ref=pat_rb,
+            color_ref=(79, 195, 247, 60),    # cian translúcido → Ruido Blanco
+            nombre_ref="Ref: Ruido Blanco",
+        )
+        # Segunda referencia (Emisora): se agrega directamente al PlotWidget interno
+        # usando la API pública de PanelGrafica._plot para no romper la encapsulación
+        # del método actualizar(), que solo maneja la curva viva.
+        if freqs_pat is not None and pat_em is not None:
+            self.panel_psd._plot.plot(
+                freqs_pat,
+                pat_em,
+                pen=pg.mkPen(color=(255, 202, 40, 60), width=1.5),
+                name="Ref: Emisora",
+            )
+        layout.addWidget(self.panel_psd)
+
+        # ── Label de resultado ───────────────────────────────────────────────
+        self.lbl_resultado = QLabel("Presiona iniciar para grabar (2 s)")
+        self.lbl_resultado.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_resultado.setStyleSheet(
+            "font-size: 22px; font-weight: bold; color: #a5d6a7;"
+        )
+        layout.addWidget(self.lbl_resultado)
+
+        # ── Botón ─────────────────────────────────────────────────────────────
+        fila = QHBoxLayout()
+        self.btn_iniciar = QPushButton("▶  Iniciar grabación")
+        self.btn_iniciar.setFixedHeight(38)
+        self.btn_iniciar.setStyleSheet("""
+            QPushButton {
+                background-color: #1565c0;
+                color: white;
+                border-radius: 6px;
+                font-size: 13px;
+                padding: 0 24px;
+            }
+            QPushButton:hover    { background-color: #1976d2; }
+            QPushButton:disabled { background-color: #263238; color: #546e7a; }
+        """)
+        self.btn_iniciar.clicked.connect(self._iniciar)
+        fila.addStretch()
+        fila.addWidget(self.btn_iniciar)
+        fila.addStretch()
+        layout.addLayout(fila)
+
+        # ── Motor de captura ──────────────────────────────────────────────────
+        self._captura = CapturaAudio(callback=self._procesar_audio_grabado)
+
+    # ── Slots / callbacks ─────────────────────────────────────────────────────
+
+    def _iniciar(self):
+        self.btn_iniciar.setEnabled(False)
+        self.lbl_resultado.setText("🔴 Grabando... (2 s)")
+        self.lbl_resultado.setStyleSheet(
+            "font-size: 24px; font-weight: bold; color: #ef5350;"
+        )
+        self._captura.iniciar()
+
+    def _procesar_audio_grabado(self, senal: np.ndarray, error: str | None = None):
+        self.btn_iniciar.setEnabled(True)
+
+        if error is not None:
+            self.lbl_resultado.setText(f"Error de micrófono: {error}")
+            return
+
+        # 1. Onda: submuestreo adaptativo para no saturar el render
+        paso = max(1, len(senal) // BUFFER)
+        self.panel_onda.actualizar(
+            np.arange(len(senal[::paso])),
+            senal[::paso],
+        )
+
+        # 2. Espectro de potencia: mismo pipeline que entrenamiento
+        #    normalizar → autocovarianza → FFT → magnitud
+        senal_norm = normalizar_rms(senal)
+        _, autocov_vals = autocovarianza_discreta(senal_norm)
+        fft_vals = calcular_fft(autocov_vals)
+        freqs, psd = calcular_magnitud(fft_vals, SAMPLE_RATE)
+        self.panel_psd.actualizar(freqs, psd)
+
+        # 3. Clasificar y mostrar veredicto
+        try:
+            clase = predecir_senal(senal)
+            color = "#4fc3f7" if clase == "RUIDO BLANCO" else "#ffca28"
+            self.lbl_resultado.setText(f"¡Resultado: {clase}!")
+            self.lbl_resultado.setStyleSheet(
+                f"font-size: 28px; font-weight: bold; color: {color};"
+            )
+        except FileNotFoundError:
+            self.lbl_resultado.setText(
+                "Sin patrones — ejecuta primero: python main.py train"
+            )
+
+
+if __name__ == "__main__":
+    pg.setConfigOptions(antialias=True)
+    app = QApplication([])
+    app.setStyle("Fusion")
+    ventana = VentanaPrincipal()
+    ventana.show()
+    app.exit(app.exec())
+========================================================
+Ruta del archivo: ./gui/panel_grafica.py
+========================================================
+"""
+gui/panel_grafica.py
+
+Widget reutilizable que encapsula un bloque gráfico completo:
+un PlotWidget con una curva de referencia (offline, translúcida)
+y una curva en vivo (online, sólida).
+
+Por qué existe este módulo:
+    Si main_window construyera los plots directamente, añadir una tercera
+    gráfica requeriría duplicar manualmente toda la lógica de construcción
+    y actualización. Al encapsularlo aquí, agregar un nuevo gráfico es
+    solo instanciar otro PanelGrafica con distintos parámetros.
+
+Responsabilidad única:
+    Construir y actualizar UN bloque visual. No sabe de micrófono, de
+    archivos de audio ni del clasificador.
+"""
+
+import numpy as np
+import pyqtgraph as pg
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel
+from PyQt6.QtCore import Qt
+
+
+class PanelGrafica(QWidget):
+    """
+    Un bloque visual autocontenido: título + PlotWidget con dos capas:
+
+      - Curva de referencia (offline, translúcida): dibujada UNA vez al crear
+        el panel, a partir de datos pregrabados del entrenamiento.
+        Es opcional: si no se pasan datos de referencia, simplemente no aparece.
+
+      - Curva en vivo (online, sólida): actualizable en cualquier momento
+        mediante el método `actualizar()`.
+
+    Parámetros
+    ----------
+    titulo      : str   Texto del título del plot.
+    color_vivo  : str   Color hex de la curva en vivo. Ej: "#42a5f5"
+    label_x     : str   Etiqueta del eje X.
+    label_y     : str   Etiqueta del eje Y.
+    freqs_ref   : np.ndarray | None  Eje X de la curva de referencia.
+    datos_ref   : np.ndarray | None  Eje Y de la curva de referencia.
+    color_ref   : tuple | None       Color RGBA de la curva de referencia.
+                                     El canal A (alpha) controla la translucidez.
+    nombre_ref  : str   Nombre en la leyenda de la curva de referencia.
+    """
+
+    def __init__(
+        self,
+        titulo: str,
+        color_vivo: str,
+        label_x: str = "",
+        label_y: str = "",
+        freqs_ref: np.ndarray | None = None,
+        datos_ref: np.ndarray | None = None,
+        color_ref: tuple | None = None,
+        nombre_ref: str = "Referencia",
+    ):
+        super().__init__()
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        # ── PlotWidget ────────────────────────────────────────────────────────
+        self._plot = pg.PlotWidget(title=titulo)
+        self._plot.setBackground("#1c2d40")
+        self._plot.showGrid(x=True, y=True, alpha=0.2)
+
+        if label_x:
+            self._plot.setLabel("bottom", label_x)
+        if label_y:
+            self._plot.setLabel("left", label_y)
+
+        # ── Curva de referencia (offline, dibujada una sola vez) ──────────────
+        # Por qué dibujamos la referencia ANTES que la curva viva:
+        # pyqtgraph apila las curvas en el orden en que se agregan. Al poner la
+        # referencia primero, queda visualmente "detrás" de la curva activa.
+        tiene_referencia = (
+            freqs_ref is not None
+            and datos_ref is not None
+            and color_ref is not None
+        )
+        if tiene_referencia:
+            self._plot.addLegend()
+            self._plot.plot(
+                freqs_ref,
+                datos_ref,
+                pen=pg.mkPen(color=color_ref, width=1.5),
+                name=nombre_ref,
+            )
+
+        # ── Curva en vivo (online, actualizable) ──────────────────────────────
+        legend_kwargs = {"name": "Audio actual"} if tiene_referencia else {}
+        self._curva_viva = self._plot.plot(
+            pen=pg.mkPen(color=color_vivo, width=2),
+            **legend_kwargs,
+        )
+
+        layout.addWidget(self._plot)
+
+    # ── API pública ───────────────────────────────────────────────────────────
+
+    def actualizar(self, eje_x: np.ndarray, eje_y: np.ndarray) -> None:
+        """
+        Reemplaza los datos de la curva en vivo.
+
+        Parámetros
+        ----------
+        eje_x : np.ndarray  Valores del eje horizontal (tiempo o frecuencias).
+        eje_y : np.ndarray  Valores del eje vertical (amplitud o magnitud).
+        """
+        self._curva_viva.setData(eje_x, eje_y)
+
+========================================================
+Ruta del archivo: ./main.py
+========================================================
+import sys
+
+from classifier.entrenamiento import entrenar
+from classifier.clasificador import predecir_audio
+
+def mostrar_menu():
+    print("=" * 50)
+    print(" SISTEMA DE CLASIFICACIÓN DE SEÑALES DE AUDIO ")
+    print("=" * 50)
+    print("Uso:")
+    print("  python main.py gui              -> Lanza la interfaz gráfica")
+    print("  python main.py train            -> Inicia la fase de entrenamiento")
+    print("  python main.py predict <ruta>   -> Clasifica el audio dado")
+    print("=" * 50)
+
+def main():
+    if len(sys.argv) < 2:
+        mostrar_menu()
+        sys.exit(0)
+        
+    comando = sys.argv[1].lower()
+    
+    if comando == "gui":
+        import pyqtgraph as pg
+        from PyQt6.QtWidgets import QApplication
+        from gui.main_window import VentanaPrincipal
+        
+        pg.setConfigOptions(antialias=True)
+        app = QApplication(sys.argv)
+        app.setStyle("Fusion")
+        ventana = VentanaPrincipal()
+        ventana.show()
+        sys.exit(app.exec())
+        
+    elif comando == "train":
+        print("Iniciando entrenamiento...")
+        entrenar()
+        
+    elif comando == "predict":
+        if len(sys.argv) < 3:
+            print("Error: falta el argumento de la ruta del archivo de audio para clasificar.")
+            print("Uso: python main.py predict <ruta_al_archivo>")
+            sys.exit(1)
+        ruta = sys.argv[2]
+        predecir_audio(ruta)
+        
+    else:
+        print(f"Error: comando '{comando}' no reconocido.")
+        mostrar_menu()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
+========================================================
+Ruta del archivo: ./README.md
+========================================================
+# Lab 1 — Reconocimiento de ruido blanco vs señal de información
+**Curso:** Procesos Estocásticos
+
+## Requisitos
+- Python 3.10 o superior
+- Micrófono funcional
+
+## Instalación en Linux
+```bash
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+## Instalación en Windows
+```bash
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+## Uso
+```bash
+python main.py
+```
+
+## Integrantes
+- Santiago Andres Walteros 
+- Juan Manuel Barrera
+- Samuel David Martinez Rivera
+- Lucia vega Linares 
+
+========================================================
+Ruta del archivo: ./requirements.txt
+========================================================
+numpy>=1.26
+scipy>=1.13
+sounddevice>=0.4
+matplotlib>=3.8
+PyQt6>=6.6
+librosa
+pyqtgraph
+
+========================================================
+Ruta del archivo: ./signal_processing/analisis.py
+========================================================
+"""
+signal_processing/analisis.py
+
+Módulo de análisis matemático de señales de audio.
+Implementa autocovarianza discreta, FFT y cálculo de magnitud espectral.
+
+Este módulo NO lee archivos ni toca hardware.
+Siempre recibe un array numpy y devuelve resultados matemáticos.
+
+NO se usa autocorrelación en ninguna parte del sistema.
+"""
+
+import numpy as np
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# NORMALIZACIÓN DE AMPLITUD
+# ─────────────────────────────────────────────────────────────────────────────
+
+def normalizar_rms(senal: np.ndarray) -> np.ndarray:
+    """
+    Normaliza la amplitud de una señal dividiendo por su RMS (Root Mean Square).
+
+    Por qué es necesario:
+        La autocovarianza es proporcional a amplitud². Si dos grabaciones del
+        mismo tipo de señal tienen distinta ganancia de micrófono o volumen,
+        sus espectros de potencia diferirán en escala pero NO en forma.
+        Al normalizar por RMS, todas las señales se procesan como si tuvieran
+        la misma "energía", haciendo que el pipeline sea independiente del
+        nivel de grabación.
+
+    El +1e-10 en el denominador evita división por cero cuando la señal
+    es silencio total (RMS ≈ 0).
+
+    Parámetros
+    ----------
+    senal : np.ndarray  Array 1D de muestras de audio (float).
+
+    Retorna
+    -------
+    senal_norm : np.ndarray  Señal con RMS unitario. Mismo shape que senal.
+    """
+    rms = np.sqrt(np.mean(senal ** 2))
+    return senal / (rms + 1e-10)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# AUTOCOVARIANZA DISCRETA
+# ─────────────────────────────────────────────────────────────────────────────
+
+def autocovarianza_discreta(senal: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Calcula la autocovarianza discreta de una señal usando el teorema de
+    Wiener-Khinchin.
+
+    Fórmula equivalente:
+        C_XX(τ) = (1/N) · Σ (x[n] - μ)(x[n+τ] - μ)   para n = 0..N-τ-1
+
+    Implementación:
+        En lugar de calcular los N desplazamientos con un bucle (lento),
+        se usa la relación de Wiener-Khinchin:
+
+            C_XX = IFFT( |FFT(x - μ)|² ) / N
+
+        La FFT de la señal centrada, elevada al cuadrado en magnitud, da el
+        espectro de potencia. La IFFT de ese espectro de potencia devuelve
+        directamente la autocovarianza. Resultado matemáticamente idéntico
+        al bucle, pero ejecutado en C por numpy sin ninguna iteración Python.
+
+        NO se usa np.correlate ni ninguna función de autocorrelación.
+
+    Propiedad clave:
+        - Ruido blanco:  C_XX(τ) ≈ 0 para todo τ ≠ 0  →  espectro plano
+        - Señal emisora: C_XX(τ) tiene estructura      →  espectro con picos
+
+    Parámetros
+    ----------
+    senal : np.ndarray
+        Array 1D de muestras de audio (float).
+
+    Retorna
+    -------
+    lags : np.ndarray
+        Eje de desplazamientos τ = [0, 1, 2, ..., N-1]
+    resultado : np.ndarray
+        C_XX(τ) para cada lag. Mismo tamaño que senal. Shape: (N,)
+    """
+    N = len(senal)
+
+    # 1. Centrar la señal (restar la media elimina el componente DC)
+    senal_centrada = senal - np.mean(senal)
+
+    # 2. FFT de la señal centrada
+    fft_centrada = np.fft.fft(senal_centrada)
+
+    # 3. Espectro de potencia: |FFT|²
+    #    Cada punto representa la energía de la señal en esa frecuencia
+    espectro_potencia = np.abs(fft_centrada) ** 2
+
+    # 4. IFFT del espectro de potencia → autocovarianza (Wiener-Khinchin)
+    #    np.real() descarta residuos imaginarios mínimos por precisión numérica
+    resultado = np.real(np.fft.ifft(espectro_potencia)) / N
+
+    lags = np.arange(N)
+
+    return lags, resultado
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FFT
+# ─────────────────────────────────────────────────────────────────────────────
+
+def calcular_fft(senal: np.ndarray) -> np.ndarray:
+    """
+    Calcula la Transformada Rápida de Fourier de la señal.
+
+    Se aplica sobre el vector resultante de autocovarianza_discreta,
+    no sobre la señal de audio cruda. Esto entrega el espectro de potencia
+    en dominio frecuencial, que es la representación que se compara entre
+    clases en el clasificador.
+
+    Parámetros
+    ----------
+    senal : np.ndarray
+        Array 1D (resultado de autocovarianza_discreta). Shape: (N,)
+
+    Retorna
+    -------
+    fft_vals : np.ndarray
+        Array de N números complejos. Shape: (N,)
+    """
+    return np.fft.fft(senal)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MAGNITUD DEL ESPECTRO
+# ─────────────────────────────────────────────────────────────────────────────
+
+def calcular_magnitud(fft_vals: np.ndarray, sample_rate: int) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Calcula la magnitud del espectro a partir de los valores de la FFT.
+
+    Solo devuelve la mitad positiva porque la FFT de una señal real
+    es simétrica: la segunda mitad es espejo de la primera y no
+    aporta información adicional.
+
+    Parámetros
+    ----------
+    fft_vals    : np.ndarray  Salida de calcular_fft (números complejos). Shape: (N,)
+    sample_rate : int         Tasa de muestreo en Hz (ej. 44100)
+
+    Retorna
+    -------
+    frecuencias : np.ndarray  Frecuencias en Hz de 0 hasta sample_rate/2. Shape: (N//2,)
+    espectro    : np.ndarray  Magnitud en cada frecuencia.                 Shape: (N//2,)
+    """
+    N = len(fft_vals)
+    mitad = N // 2
+
+    espectro    = np.abs(fft_vals[:mitad])
+    frecuencias = np.fft.fftfreq(N, d=1.0 / sample_rate)[:mitad]
+
+    return frecuencias, espectro
