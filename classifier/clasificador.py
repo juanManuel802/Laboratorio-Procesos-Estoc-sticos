@@ -78,24 +78,3 @@ def predecir_senal(senal: np.ndarray) -> str:
 
     print(f"\\n> DECISIÓN: El audio ingresado es: *** {clase} ***\\n")
     return clase
-
-
-def predecir_audio(ruta_audio: str) -> str:
-    """
-    Lee un archivo de audio del disco, calcula su espectro de magnitud
-    y lo compara con los patrones entrenados usando distancia euclidiana.
-    
-    Parámetros
-    ----------
-    ruta_audio : str
-        Ruta al archivo a clasificar.
-        
-    Retorna
-    -------
-    Clase predicha: "RUIDO BLANCO" o "EMISORA"
-    """
-    # Cargar la señal desde disco
-    senal, _ = librosa.load(ruta_audio, sr=SAMPLE_RATE, mono=True)
-    
-    # Delegar a la lógica matemática genérica en memoria
-    return predecir_senal(senal)
