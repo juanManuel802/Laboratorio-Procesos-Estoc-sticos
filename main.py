@@ -1,7 +1,7 @@
 import sys
 
 from classifier.entrenamiento import entrenar
-from classifier.clasificador import predecir_audio
+"""from classifier.clasificador import predecir_senal"""
 
 def mostrar_menu():
     print("=" * 50)
