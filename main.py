@@ -10,7 +10,6 @@ def mostrar_menu():
     print("Uso:")
     print("  python main.py gui              -> Lanza la interfaz gráfica")
     print("  python main.py train            -> Inicia la fase de entrenamiento")
-    print("  python main.py predict <ruta>   -> Clasifica el audio dado")
     print("=" * 50)
 
 def main():
@@ -35,15 +34,7 @@ def main():
     elif comando == "train":
         print("Iniciando entrenamiento...")
         entrenar()
-        
-    elif comando == "predict":
-        if len(sys.argv) < 3:
-            print("Error: falta el argumento de la ruta del archivo de audio para clasificar.")
-            print("Uso: python main.py predict <ruta_al_archivo>")
-            sys.exit(1)
-        ruta = sys.argv[2]
-        predecir_audio(ruta)
-        
+
     else:
         print(f"Error: comando '{comando}' no reconocido.")
         mostrar_menu()
