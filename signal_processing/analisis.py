@@ -1,15 +1,17 @@
 import numpy as np
+from statsmodels.tsa.stattools import acovf
 
-def normalizar_rms(senal: np.ndarray) -> np.ndarray:
-    rms = np.sqrt(np.mean(senal ** 2))
-    return senal / (rms + 1e-10)
+
+
+def normalizar(senalmean: np.ndarray) -> np.ndarray:
+    if len(senalmean.shape) > 1: 
+        senalmean = np.mean(senalmean, axis = 1)
+    senalmean = np.mean(senalmean)
+    senalmean = senalmean - np.mean(senalmean)
+    return senalmean
 
 def autocovarianza_discreta(senal: np.ndarray) -> np.ndarray:
-    N = len(senal)
-    senal_centrada = senal - np.mean(senal)
-    fft_centrada = np.fft.fft(senal_centrada)
-    espectro_potencia = np.abs(fft_centrada) ** 2
-    resultado = np.real(np.fft.ifft(espectro_potencia)) / N
+    resultado = acovf(senal, fft=True, demean=True).astype(np.float64)
     return resultado
 
 def calcular_fft(senal: np.ndarray) -> np.ndarray:

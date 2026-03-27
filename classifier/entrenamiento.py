@@ -2,7 +2,7 @@ import os
 import numpy as np
 import soundfile as sf
 
-from signal_processing.analisis import normalizar_rms,autocovarianza_discreta,calcular_fft,calcular_magnitud
+from signal_processing.analisis import normalizar,autocovarianza_discreta,calcular_fft,calcular_magnitud
 
 SAMPLE_RATE  = 44100
 DURACION_SEG = 2
@@ -40,14 +40,14 @@ def _procesar_carpeta(carpeta: str) -> tuple[np.ndarray, np.ndarray]:
 
         senal = _leer_audio(ruta)
 
-        senal = normalizar_rms(senal)
+        senal = normalizar(senal)
 
-        _, autocov_vals = autocovarianza_discreta(senal)
+        autocov_vals = autocovarianza_discreta(senal)
         matriz_autocovs[i] = autocov_vals
 
         fft_vals = calcular_fft(autocov_vals)
 
-        _, espectro = calcular_magnitud(fft_vals, SAMPLE_RATE)
+        espectro = calcular_magnitud(fft_vals, SAMPLE_RATE)
         matriz_espectros[i] = espectro
 
     espectro_promedio = np.mean(matriz_espectros, axis=0)

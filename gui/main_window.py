@@ -182,7 +182,7 @@ class VentanaPrincipal(QMainWindow):
         fft_vals = calcular_fft(autocov_vals)
         psd = calcular_magnitud(fft_vals, SAMPLE_RATE)
         eje_x = np.arange(len(psd))
-        self.panel_psd.actualizar(psd)
+        self.panel_psd.actualizar(eje_x, psd)
 
         # 3. Clasificar y mostrar veredicto
         try:

@@ -1,6 +1,6 @@
 import os
 import numpy as np
-from signal_processing.analisis import normalizar_rms, autocovarianza_discreta, calcular_fft, calcular_magnitud
+from signal_processing.analisis import normalizar, autocovarianza_discreta, calcular_fft, calcular_magnitud
 
 SAMPLE_RATE    = 44100
 DURACION_SEG   = 2
@@ -19,7 +19,7 @@ def predecir_senal(senal: np.ndarray) -> str:
     elif len(senal) < N_MUESTRAS:
         senal = np.pad(senal, (0, N_MUESTRAS - len(senal)))
 
-    senal = normalizar_rms(senal)
+    senal = normalizar(senal)
     autocov_vals = autocovarianza_discreta(senal)
     fft_vals = calcular_fft(autocov_vals)
     magnitud = calcular_magnitud(fft_vals, SAMPLE_RATE)

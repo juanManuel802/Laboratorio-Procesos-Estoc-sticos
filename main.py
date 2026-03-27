@@ -1,5 +1,6 @@
 import sys
 
+
 from classifier.entrenamiento import entrenar
 """from classifier.clasificador import predecir_senal"""
 
