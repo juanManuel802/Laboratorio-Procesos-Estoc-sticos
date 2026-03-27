@@ -1,24 +1,17 @@
 import numpy as np
-from statsmodels.tsa.stattools import acovf
 
+def normalizar(senal: np.ndarray) -> np.ndarray:
+    if len(senal.shape) > 1:
+        senal = np.mean(senal, axis=1)
+    senal = senal - np.mean(senal)
+    std = np.std(senal)
+    if std > 0:
+        senal = senal / std
+    return senal
 
-
-def normalizar(senalmean: np.ndarray) -> np.ndarray:
-    if len(senalmean.shape) > 1: 
-        senalmean = np.mean(senalmean, axis = 1)
-    senalmean = np.mean(senalmean)
-    senalmean = senalmean - np.mean(senalmean)
-    return senalmean
-
-def autocovarianza_discreta(senal: np.ndarray) -> np.ndarray:
-    resultado = acovf(senal, fft=True, demean=True).astype(np.float64)
-    return resultado
-
-def calcular_fft(senal: np.ndarray) -> np.ndarray:
-    return np.fft.fft(senal)
-
-def calcular_magnitud(fft_vals: np.ndarray, sample_rate: int) -> np.ndarray:
+def calcular_espectro_directo(senal: np.ndarray) -> np.ndarray:
+    fft_vals = np.fft.fft(senal)
     N = len(fft_vals)
     mitad = N // 2
-    espectro = np.abs(fft_vals[:mitad])
+    espectro = np.abs(fft_vals[:mitad]) / N
     return espectro
