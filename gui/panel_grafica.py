@@ -77,11 +77,11 @@ class PanelGrafica(QWidget):
         # Por qué dibujamos la referencia ANTES que la curva viva:
         # pyqtgraph apila las curvas en el orden en que se agregan. Al poner la
         # referencia primero, queda visualmente "detrás" de la curva activa.
-        tiene_referencia = (
-            freqs_ref is not None
-            and datos_ref is not None
-            and color_ref is not None
-        )
+        #tiene_referencia = (
+        #    freqs_ref is not None
+        #    and datos_ref is not None
+        #    and color_ref is not None
+        #)
         if tiene_referencia:
             self._plot.addLegend()
             self._plot.plot(

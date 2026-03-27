@@ -110,9 +110,9 @@ class VentanaPrincipal(QMainWindow):
         # Segunda referencia (Emisora): se agrega directamente al PlotWidget interno
         # usando la API pública de PanelGrafica._plot para no romper la encapsulación
         # del método actualizar(), que solo maneja la curva viva.
-        if freqs_pat is not None and pat_em is not None:
+        if eje_x is not None and pat_em is not None:
             self.panel_psd._plot.plot(
-                freqs_pat,
+                eje_x,
                 pat_em,
                 pen=pg.mkPen(color=(255, 202, 40, 60), width=1.5),
                 name="Ref: Emisora",
