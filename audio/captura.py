@@ -87,26 +87,38 @@ class CapturaAudio:
         un hilo separado, la GUI no se congela.
         """
         try:
-            # Grabar: N_MUESTRAS a SAMPLE_RATE Hz, 1 canal (mono), float32
+            # Grabar: N_MUESTRAS a SAMPLE_RATE Hz, en los canales disponibles
             # sd.rec() inicia la grabación y sd.wait() espera a que termine
             senal_stereo = sd.rec(
                 frames=N_MUESTRAS,
                 samplerate=SAMPLE_RATE,
-                channels=1,
+                channels=2,
                 dtype="float32",
             )
             sd.wait()  # bloquea este hilo hasta completar los 2 segundos
 
-            # sd.rec devuelve shape (N_MUESTRAS, 1) → aplanar a (N_MUESTRAS,)
-            senal = senal_stereo.flatten()
+            # Si el micrófono es estéreo, tomar solo el canal izquierdo
+            # shape (N_MUESTRAS, 2) o (N_MUESTRAS, 1) → (N_MUESTRAS,)
+            if senal_stereo.ndim == 2:
+                senal = senal_stereo[:, 0]  # canal izquierdo
+            else:
+                senal = senal_stereo.flatten()
 
-            # Entregar el array a quien esté escuchando (la GUI)
-            self._callback(senal)
-
+          
+          
         except Exception as e:
             # Si el micrófono no está disponible u ocurre otro error,
             # notificar a la GUI con None para que pueda mostrar el error
-            self._callback(None, error=str(e))
-
-        finally:
             self._grabando = False
+            self._callback(None, error=str(e))
+            return
+        
+        self._grabando = False
+                  # Entregar el array a quien esté escuchando (la GUI)
+        self._callback(senal)
+
+            
+
+
+     
+            

@@ -39,20 +39,16 @@ SAMPLE_RATE = 44100
 # HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _cargar_patrones() -> tuple[np.ndarray | None, np.ndarray | None, np.ndarray | None]:
-    """
-    Intenta cargar los patrones de entrenamiento desde disco.
-
-    Retorna (frecuencias, patron_rb, patron_em).
-    Si algún archivo no existe (no se corrió train), retorna (None, None, None)
-    y la GUI simplemente no mostrará las curvas de referencia.
-    """
-    ruta_freq = os.path.join(CARPETA_PAT, "frecuencias.npy")
+def _cargar_patrones():
+    
     ruta_rb   = os.path.join(CARPETA_PAT, "espectro_promedio_rb.npy")
     ruta_em   = os.path.join(CARPETA_PAT, "espectro_promedio_em.npy")
 
-    if os.path.exists(ruta_freq) and os.path.exists(ruta_rb) and os.path.exists(ruta_em):
-        return np.load(ruta_freq), np.load(ruta_rb), np.load(ruta_em)
+    if os.path.exists(ruta_rb) and os.path.exists(ruta_em):
+        pat_rb = np.load(ruta_rb)
+        pat_em = np.load(ruta_em)
+        eje_x = np.arange(len(pat_rb))
+        return eje_x, pat_rb, pat_em
 
     return None, None, None
 
@@ -84,7 +80,7 @@ class VentanaPrincipal(QMainWindow):
         layout.addWidget(titulo)
 
         # ── Cargar patrones de entrenamiento (pueden no existir aún) ─────────
-        freqs_pat, pat_rb, pat_em = _cargar_patrones()
+        eje_x, pat_rb, pat_em = _cargar_patrones()
 
         # ── Panel: onda en el tiempo ─────────────────────────────────────────
         # No tiene referencia de entrenamiento porque promediar fases no tiene
@@ -102,11 +98,11 @@ class VentanaPrincipal(QMainWindow):
         # el espectro de potencia es estable entre grabaciones de la misma clase.
         # Se dibujan ambas referencias para que el usuario vea en cuál "cae" su audio.
         self.panel_psd = PanelGrafica(
-            titulo="Espectro de potencia (PSD)",
+            titulo="Espectros",
             color_vivo="#ce93d8",
-            label_x="Frecuencia (Hz)",
+            label_x="hola",
             label_y="Magnitud",
-            freqs_ref=freqs_pat,
+            freqs_ref=eje_x,
             datos_ref=pat_rb,
             color_ref=(79, 195, 247, 60),    # cian translúcido → Ruido Blanco
             nombre_ref="Ref: Ruido Blanco",
@@ -159,7 +155,7 @@ class VentanaPrincipal(QMainWindow):
 
     def _iniciar(self):
         self.btn_iniciar.setEnabled(False)
-        self.lbl_resultado.setText("🔴 Grabando... (2 s)")
+        self.lbl_resultado.setText("Grabando... (2 s)")
         self.lbl_resultado.setStyleSheet(
             "font-size: 24px; font-weight: bold; color: #ef5350;"
         )
@@ -182,10 +178,11 @@ class VentanaPrincipal(QMainWindow):
         # 2. Espectro de potencia: mismo pipeline que entrenamiento
         #    normalizar → autocovarianza → FFT → magnitud
         senal_norm = normalizar_rms(senal)
-        _, autocov_vals = autocovarianza_discreta(senal_norm)
+        autocov_vals = autocovarianza_discreta(senal_norm)
         fft_vals = calcular_fft(autocov_vals)
-        freqs, psd = calcular_magnitud(fft_vals, SAMPLE_RATE)
-        self.panel_psd.actualizar(freqs, psd)
+        psd = calcular_magnitud(fft_vals, SAMPLE_RATE)
+        eje_x = np.arange(len(psd))
+        self.panel_psd.actualizar(psd)
 
         # 3. Clasificar y mostrar veredicto
         try:
